@@ -217,6 +217,10 @@ async function handleProxyRequest(request, env) {
     headers.set('cache-control', 'private');
   }
 
+  if (debug.noCerebras) {
+    headers.set('x-no-cerebras', debug.noCerebras);
+  }
+
   if (debug.provider) {
     headers.set('x-debug', `provider=${debug.provider}; model=${debug.model}`);
   }
@@ -464,37 +468,47 @@ async function generateBatch(context, texts) {
   const userContent = JSON.stringify(texts);
   const maxTokens = Math.min(count * 300, 4096);
 
-  const providers = [];
+  // Cerebras is the preferred (fastest) provider — try it first
   if (env.CEREBRAS_API_KEY) {
-    providers.push({
-      name: 'Cerebras',
-      model: CEREBRAS_MODEL,
-      call: () => callCerebras(env.CEREBRAS_API_KEY, systemPrompt, userContent, maxTokens),
-    });
-  }
-  if (env.AI && typeof env.AI.run === 'function') {
-    providers.push({
-      name: 'Cloudflare Workers AI',
-      model: CF_AI_MODEL,
-      call: () => callCloudflareAI(env.AI, systemPrompt, userContent, maxTokens),
-    });
-  }
-
-  for (const provider of providers) {
     try {
-      const raw = await provider.call();
+      const raw = await callCerebras(env.CEREBRAS_API_KEY, systemPrompt, userContent, maxTokens);
       const parsed = parseBatchResponse(raw, count);
       if (parsed.result) {
-        debug.provider = provider.name;
-        debug.model = provider.model;
+        debug.provider = 'Cerebras';
+        debug.model = CEREBRAS_MODEL;
         return parsed.result;
       }
 
-      const msg = `${provider.name}: ${parsed.error}`;
+      const reason = `Cerebras: ${parsed.error}`;
+      console.error(reason, raw);
+      errors.push(reason);
+      debug.noCerebras = parsed.error;
+    } catch (error) {
+      const reason = `Cerebras: ${error.message}`;
+      console.error(reason);
+      errors.push(reason);
+      debug.noCerebras = error.message;
+    }
+  } else {
+    debug.noCerebras = 'CEREBRAS_API_KEY not configured';
+  }
+
+  // Fallback to Cloudflare Workers AI
+  if (env.AI && typeof env.AI.run === 'function') {
+    try {
+      const raw = await callCloudflareAI(env.AI, systemPrompt, userContent, maxTokens);
+      const parsed = parseBatchResponse(raw, count);
+      if (parsed.result) {
+        debug.provider = 'Cloudflare Workers AI';
+        debug.model = CF_AI_MODEL;
+        return parsed.result;
+      }
+
+      const msg = `Cloudflare Workers AI: ${parsed.error}`;
       console.error(msg, raw);
       errors.push(msg);
     } catch (error) {
-      const msg = `${provider.name}: ${error.message}`;
+      const msg = `Cloudflare Workers AI: ${error.message}`;
       console.error(msg);
       errors.push(msg);
     }
