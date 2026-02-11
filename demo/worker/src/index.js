@@ -4,6 +4,7 @@ const HEADER_ENABLED = 'x-generative-enabled';
 const HEADER_PERSONALITY = 'x-generative-personality';
 const CEREBRAS_API_URL = 'https://api.cerebras.ai/v1/chat/completions';
 const CEREBRAS_MODEL = 'gpt-oss-120b';
+const CF_AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
 
 const DEFAULT_MAIN_PROMPT = 'Rewrite webpage copy to match the given personality while keeping the same meaning and length.';
 
@@ -193,11 +194,13 @@ async function handleProxyRequest(request, env) {
   const personality = personalities.find((item) => item.id === personalityId) || personalities[0];
 
   const errors = [];
+  const debug = { provider: null, model: null };
   const rewritten = await rewriteGenerativeSections(html, {
     env,
     mainPrompt,
     personality,
     errors,
+    debug,
   });
 
   const customized = rewritten !== html;
@@ -206,12 +209,16 @@ async function handleProxyRequest(request, env) {
   headers.set('x-customized', customized ? 'true' : 'false');
 
   if (errors.length > 0) {
-    headers.set('x-error', errors.join('; '));
+    headers.set('x-errors', errors.join('; '));
   }
 
   if (customized) {
     headers.set('x-generative-profile', personality.id);
     headers.set('cache-control', 'private');
+  }
+
+  if (debug.provider) {
+    headers.set('x-debug', `provider=${debug.provider}; model=${debug.model}`);
   }
 
   return new Response(rewritten, {
@@ -350,9 +357,8 @@ async function rewriteGenerativeSections(html, context) {
     return html;
   }
 
-  const replacements = await Promise.all(
-    edits.map((edit) => generateCustomizedText(context, edit.innerHTML)),
-  );
+  const texts = edits.map((edit) => edit.innerHTML);
+  const replacements = await generateBatch(context, texts);
 
   let result = html;
   for (let i = edits.length - 1; i >= 0; i--) {
@@ -364,66 +370,141 @@ async function rewriteGenerativeSections(html, context) {
   return result;
 }
 
-async function generateCustomizedText(context, originalText) {
-  const { env, mainPrompt, personality, errors } = context;
-  const fallbackText = originalText;
-
-  const apiKey = env.CEREBRAS_API_KEY;
-  if (!apiKey) {
-    errors.push('CEREBRAS_API_KEY not set');
-    return fallbackText;
-  }
-
-  const systemPrompt = [
-    'Rewrite this website text according to the provided prompt and personality.',
-    'CRITICAL: The input may contain HTML tags such as <strong>, <em>, <a>, <br>, <span>, etc.',
+function buildBatchSystemPrompt(mainPrompt, personality, count) {
+  return [
+    `You will receive a JSON array of ${count} website text snippets.`,
+    'Rewrite each snippet according to the provided prompt and personality.',
+    'CRITICAL: Snippets may contain HTML tags such as <strong>, <em>, <a>, <br>, <span>, etc.',
     'You MUST preserve every HTML tag exactly as-is. Do NOT add, remove, or modify any tags.',
     'Only change the human-readable text between and around the tags.',
-    'Return the rewritten text with all original HTML tags intact. No explanations.',
+    `Return a JSON array of exactly ${count} rewritten strings in the same order. No other output.`,
     `Main prompt: ${mainPrompt}`,
     `Personality instructions: ${personality.prompt}`,
   ].join('\n');
+}
 
-  try {
-    const response = await fetch(CEREBRAS_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: CEREBRAS_MODEL,
-        max_tokens: 220,
-        temperature: 0.8,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: originalText },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      const msg = `Cerebras API ${response.status}: ${errorBody}`;
-      console.error(msg);
-      errors.push(msg);
-      return fallbackText;
-    }
-
-    const data = await response.json();
-    const text = data.choices?.[0]?.message?.content?.trim();
-    if (text) {
-      return text;
-    }
-
-    errors.push('Cerebras returned empty content');
-  } catch (error) {
-    const msg = `Cerebras generation failed: ${error.message || error}`;
-    console.error(msg);
-    errors.push(msg);
+function parseBatchResponse(raw, count) {
+  const jsonMatch = raw.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) {
+    return { error: 'response did not contain a JSON array' };
   }
 
-  return fallbackText;
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    return { error: 'response contained invalid JSON' };
+  }
+
+  if (!Array.isArray(parsed)) {
+    return { error: 'parsed response is not an array' };
+  }
+
+  if (parsed.length !== count) {
+    return { error: `expected ${count} items but got ${parsed.length}` };
+  }
+
+  return { result: parsed.map((item) => (typeof item === 'string' ? item : String(item))) };
+}
+
+async function callCerebras(apiKey, systemPrompt, userContent, maxTokens) {
+  const response = await fetch(CEREBRAS_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: CEREBRAS_MODEL,
+      max_tokens: maxTokens,
+      temperature: 0.8,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Cerebras API ${response.status}: ${body}`);
+  }
+
+  const data = await response.json();
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) {
+    throw new Error('Cerebras returned empty content');
+  }
+
+  return text;
+}
+
+async function callCloudflareAI(ai, systemPrompt, userContent, maxTokens) {
+  const result = await ai.run(CF_AI_MODEL, {
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent },
+    ],
+    max_tokens: maxTokens,
+    temperature: 0.8,
+  });
+
+  const text = typeof result.response === 'string' ? result.response.trim() : '';
+  if (!text) {
+    throw new Error('Cloudflare AI returned empty content');
+  }
+
+  return text;
+}
+
+async function generateBatch(context, texts) {
+  const { env, mainPrompt, personality, errors, debug } = context;
+  const count = texts.length;
+  const systemPrompt = buildBatchSystemPrompt(mainPrompt, personality, count);
+  const userContent = JSON.stringify(texts);
+  const maxTokens = Math.min(count * 300, 4096);
+
+  const providers = [];
+  if (env.CEREBRAS_API_KEY) {
+    providers.push({
+      name: 'Cerebras',
+      model: CEREBRAS_MODEL,
+      call: () => callCerebras(env.CEREBRAS_API_KEY, systemPrompt, userContent, maxTokens),
+    });
+  }
+  if (env.AI && typeof env.AI.run === 'function') {
+    providers.push({
+      name: 'Cloudflare Workers AI',
+      model: CF_AI_MODEL,
+      call: () => callCloudflareAI(env.AI, systemPrompt, userContent, maxTokens),
+    });
+  }
+
+  for (const provider of providers) {
+    try {
+      const raw = await provider.call();
+      const parsed = parseBatchResponse(raw, count);
+      if (parsed.result) {
+        debug.provider = provider.name;
+        debug.model = provider.model;
+        return parsed.result;
+      }
+
+      const msg = `${provider.name}: ${parsed.error}`;
+      console.error(msg, raw);
+      errors.push(msg);
+    } catch (error) {
+      const msg = `${provider.name}: ${error.message}`;
+      console.error(msg);
+      errors.push(msg);
+    }
+  }
+
+  if (providers.length === 0) {
+    errors.push('No AI provider available');
+  }
+
+  return texts;
 }
 
 async function readMainPrompt(env) {

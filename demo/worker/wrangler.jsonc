@@ -4,6 +4,9 @@
   "main": "src/index.js",
   "compatibility_date": "2026-02-10",
   "workers_dev": true,
+  "ai": {
+    "binding": "AI"
+  },
   "kv_namespaces": [
     {
       "binding": "GEN_CONFIG",

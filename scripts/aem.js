@@ -569,6 +569,10 @@ async function loadBlock(block) {
   if (status !== 'loading' && status !== 'loaded') {
     block.dataset.blockStatus = 'loading';
     const { blockName } = block.dataset;
+    if (blockName.includes('generative-customization')) {
+      block.dataset.blockStatus = 'loaded';
+      return block;
+    }
     try {
       const cssLoaded = loadCSS(`${window.hlx.codeBasePath}/blocks/${blockName}/${blockName}.css`);
       const decorationComplete = new Promise((resolve) => {
