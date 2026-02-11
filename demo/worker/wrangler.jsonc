@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "generative-proxy-demo",
+  "main": "src/index.js",
+  "compatibility_date": "2026-02-10",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "GEN_CONFIG",
+      "id": "24c8e7ab3598405dab64b1c93267a160",
+      "preview_id": "1ac50a1607c24a07bf703816fa31652f"
+    }
+  ],
+  "vars": {
+    "ORIGIN_BASE_URL": "https://main--generative-proxy-1--froesef.aem.page"
+  }
+}

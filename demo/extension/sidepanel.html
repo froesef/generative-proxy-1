@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Generative Personality Panel</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="hero">
+        <h1>Generative Proxy</h1>
+        <label class="toggle">
+          <input id="headers-enabled" type="checkbox" checked />
+          Enable
+        </label>
+      </header>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="settings">Settings</button>
+        <button class="tab" data-tab="prompt">Prompt</button>
+      </nav>
+
+      <section id="tab-settings" class="tab-content active">
+        <div class="card">
+          <label>
+            Origin host
+            <input id="customize-host" type="url" placeholder="https://main--mysite--owner.aem.page" value="https://main--generative-proxy-1--froesef.aem.page" />
+          </label>
+
+          <label>
+            Personality
+            <select id="personality-select"></select>
+          </label>
+        </div>
+      </section>
+
+      <section id="tab-prompt" class="tab-content">
+        <div class="card">
+          <label>
+            Main prompt
+            <textarea id="main-prompt" rows="4" placeholder="Rewrite this page copy..."></textarea>
+          </label>
+          <button id="save-prompt" type="button">Save Prompt</button>
+        </div>
+      </section>
+
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </main>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

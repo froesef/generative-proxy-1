@@ -19,6 +19,12 @@ Before using the aem-boilerplate, we recommand you to go through the documentati
 npm i
 ```
 
+## Generative Proxy Demo
+
+A Cloudflare Worker + browser side-panel extension demo is available at:
+
+- `/Users/ffroese/git/generative-proxy-1/demo/README.md`
+
 ## Linting
 
 ```sh
